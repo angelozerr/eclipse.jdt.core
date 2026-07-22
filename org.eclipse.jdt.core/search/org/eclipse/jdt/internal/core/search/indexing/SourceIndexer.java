@@ -19,7 +19,6 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspaceRoot;
 import org.eclipse.core.resources.ResourcesPlugin;
-import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.Path;
@@ -90,14 +89,13 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 	private CompilationUnitDeclaration cud;
 	private org.eclipse.jdt.core.dom.ASTNode dom;
 	private static final boolean DEBUG = false;
+	private static volatile Boolean turbineAvailable;
+	private static final boolean DOM_BASED_INDEXER = Boolean.getBoolean("SourceIndexer.DOM_BASED_INDEXER"); //$NON-NLS-1$
+	private static final boolean TURBINE_BASED_INDEXER = Boolean.getBoolean("SourceIndexer.TURBINE_BASED_INDEXER"); //$NON-NLS-1$
 
 	public SourceIndexer(SearchDocument document) {
 		super(document);
 		this.requestor = new SourceIndexerRequestor(this);
-	}
-
-	private boolean usedDomBasedIndexing() {
-		return Boolean.getBoolean(getClass().getSimpleName() + ".DOM_BASED_INDEXER");  //$NON-NLS-1$
 	}
 
 	@Override
@@ -105,10 +103,20 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 		if (disabledForFile()) {
 			return;
 		}
-		if (usedDomBasedIndexing()) {
+		if (TURBINE_BASED_INDEXER) {
+			if (!indexDocumentFromTurbine()) {
+				indexDocumentDefault();
+			}
+			return;
+		}
+		if (DOM_BASED_INDEXER) {
 			indexDocumentFromDOM();
 			return;
 		}
+		indexDocumentDefault();
+	}
+
+	private void indexDocumentDefault() {
 		// Create a new Parser
 		String documentPath = this.document.getPath();
 		SourceElementParser parser = this.document.getParser();
@@ -141,6 +149,40 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 		}
 	}
 
+	/**
+	 * Index a document using Google Turbine's lightweight header parser.
+	 * Turbine only parses declarations (skipping method bodies), making it
+	 * significantly faster than ECJ for indexing.
+	 *
+	 * @return true if successful, false if Turbine is unavailable or parsing failed
+	 */
+	boolean indexDocumentFromTurbine() {
+		if (turbineAvailable == Boolean.FALSE) return false;
+		String documentPath = this.document.getPath();
+		char[] source = null;
+		try {
+			source = this.document.getCharContents();
+		} catch (Exception e) {
+			// ignore
+		}
+		if (source == null) return false;
+		try {
+			var compUnit = com.google.turbine.parse.Parser.parse(
+					new com.google.turbine.diag.SourceFile(documentPath, new String(source)));
+			compUnit.accept(new TurbineToIndexVisitor(this, documentPath), null);
+			turbineAvailable = Boolean.TRUE;
+			return true;
+		} catch (NoClassDefFoundError e) {
+			turbineAvailable = Boolean.FALSE;
+			return false;
+		} catch (Exception | Error e) {
+			if (JobManager.VERBOSE) {
+				System.err.println("Turbine indexing failed for " + documentPath + "" +  e.getMessage()); //$NON-NLS-1$
+			}
+			return false;
+		}
+	}
+
 	@Override
 	public void accept(IBinaryType binaryType, PackageBinding packageBinding, AccessRestriction accessRestriction) {
 		this.lookupEnvironment.createBinaryTypeFrom(binaryType, packageBinding, accessRestriction);
@@ -166,7 +208,7 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 	}
 
 	public void resolveDocument() {
-		if (usedDomBasedIndexing() && this.dom != null && getUnit() instanceof org.eclipse.jdt.internal.core.CompilationUnit unit) {
+		if (DOM_BASED_INDEXER && this.dom != null && getUnit() instanceof org.eclipse.jdt.internal.core.CompilationUnit unit) {
 			resolveDocumentDomImpl(unit);
 		} else {
 			try {
@@ -323,7 +365,7 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 
 	@Override
 	public void indexResolvedDocument() {
-		if (usedDomBasedIndexing() && this.dom != null) {
+		if (DOM_BASED_INDEXER && this.dom != null) {
 			// just re-run indexing, but with the resolved document (and its bindings)
 			this.dom.accept(new DOMToIndexVisitor(this));
 			this.dom = null;
@@ -474,7 +516,7 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 				IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
 				file = root.getFile(path);
 			}
-			try {
+			/*try {
 				return file.isContentRestricted();
 			} catch (CoreException e) {
 				JavaCore.getPlugin().getLog().log(e.getStatus());
@@ -482,8 +524,8 @@ public class SourceIndexer extends AbstractIndexer implements ITypeRequestor, Su
 				 * Assume indexing is disabled for the file, since the preference for disabling is set
 				 * but we cannot determine if the file is restricted.
 				 */
-				return true;
-			}
+			/*	return true;
+			}*/
 		}
 		return false;
 	}

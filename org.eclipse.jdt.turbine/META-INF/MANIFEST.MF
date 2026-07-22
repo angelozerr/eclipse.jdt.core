@@ -1,0 +1,16 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Google Turbine Header Compiler
+Bundle-SymbolicName: org.eclipse.jdt.turbine
+Bundle-Version: 1.15.0.qualifier
+Bundle-Vendor: Eclipse.org - JDT
+Bundle-RequiredExecutionEnvironment: JavaSE-17
+Bundle-ClassPath: .,
+ lib/guava-33.4.0-jre.jar,
+ lib/turbine-1.15.0.jar
+Export-Package: com.google.common.collect,
+ com.google.turbine.diag,
+ com.google.turbine.model,
+ com.google.turbine.parse,
+ com.google.turbine.tree
+Automatic-Module-Name: org.eclipse.jdt.turbine
